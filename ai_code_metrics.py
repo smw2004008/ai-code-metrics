@@ -14,6 +14,7 @@ from typing import Optional
 
 TRAILER = "ai-assisted"
 NOTES_REF = "refs/notes/ai-assisted"
+AI_TOOL_NOTES_REF = "refs/notes/ai-tool"
 SOURCE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs",
     ".c", ".h", ".cpp", ".hpp", ".cs", ".php", ".rb", ".swift",
@@ -33,6 +34,7 @@ class CommitStats:
     commit: str
     subject: str
     ai_assisted: bool
+    ai_tool: Optional[str]
     additions: int
     deletions: int
     files: list[FileStats]
@@ -62,9 +64,20 @@ def marked_by_trailer(message: str) -> bool:
     return False
 
 
+def read_note(repo: Path, ref: str, commit: str) -> str:
+    return git(repo, "notes", f"--ref={ref}", "show", commit, check=False).strip()
+
+
 def marked_by_note(repo: Path, commit: str) -> bool:
-    note = git(repo, "notes", f"--ref={NOTES_REF}", "show", commit, check=False)
-    return marked_by_trailer(note)
+    return marked_by_trailer(read_note(repo, NOTES_REF, commit))
+
+
+def ai_tool_from_text(text: str) -> Optional[str]:
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip().lower() == "ai-tool" and value.strip():
+            return value.strip()
+    return None
 
 
 def parse_numstat(raw: str) -> tuple[int, int, list[FileStats]]:
@@ -102,6 +115,9 @@ def collect(repo: Path, since: Optional[str], until: Optional[str]) -> list[Comm
         if len(parts) != 3:
             continue
         commit, subject, body = parts
+        ai_tool = ai_tool_from_text(body) or ai_tool_from_text(
+            read_note(repo, AI_TOOL_NOTES_REF, commit)
+        )
         additions, deletions, files = parse_numstat(
             git(repo, "show", "--format=", "--numstat", "--no-renames", commit)
         )
@@ -110,6 +126,7 @@ def collect(repo: Path, since: Optional[str], until: Optional[str]) -> list[Comm
                 commit=commit,
                 subject=subject,
                 ai_assisted=marked_by_trailer(body) or marked_by_note(repo, commit),
+                ai_tool=ai_tool,
                 additions=additions,
                 deletions=deletions,
                 files=files,
@@ -124,6 +141,10 @@ def summarize(repo: Path, commits: list[CommitStats], since: Optional[str], unti
     ai_commits = [item for item in commits if item.ai_assisted]
     ai_add = sum(item.additions for item in ai_commits)
     ai_del = sum(item.deletions for item in ai_commits)
+    tool_additions: dict[str, int] = {}
+    for commit in ai_commits:
+        tool = commit.ai_tool or "未注明"
+        tool_additions[tool] = tool_additions.get(tool, 0) + commit.additions
     files_by_path: dict[str, dict[str, int]] = {}
     for commit in commits:
         for file in commit.files:
@@ -141,6 +162,10 @@ def summarize(repo: Path, commits: list[CommitStats], since: Optional[str], unti
         "ai_assisted_additions": ai_add,
         "ai_assisted_deletions": ai_del,
         "ai_assisted_addition_ratio": round(ai_add / total_add, 4) if total_add else 0.0,
+        "ai_tool_additions": [
+            {"tool": tool, "additions": additions}
+            for tool, additions in sorted(tool_additions.items())
+        ],
         "files": [
             {"path": path, **totals}
             for path, totals in sorted(
@@ -166,8 +191,18 @@ def render_text(report: dict) -> str:
         f"AI 辅助提交数：{report['ai_assisted_commit_count']}",
         f"AI 辅助代码新增/删除行：{report['ai_assisted_additions']} / {report['ai_assisted_deletions']}",
         f"AI 辅助代码新增行占比：{ratio:.2f}%",
-        "代码文件明细：",
+        "按 AI 工具统计的辅助代码新增行：",
     ]
+    if report["ai_tool_additions"]:
+        lines.extend(
+            f"  {item['tool']}: +{item['additions']}"
+            for item in report["ai_tool_additions"]
+        )
+    else:
+        lines.append("  （所选范围内没有 AI 辅助提交）")
+    lines.append(
+        "代码文件明细：",
+    )
     if report["files"]:
         lines.extend(
             f"  {item['path']}: +{item['additions']} / -{item['deletions']}"

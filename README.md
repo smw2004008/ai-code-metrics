@@ -25,6 +25,20 @@ python ai_code_metrics.py --repo . --since 2026-01-01 --until 2026-02-01 --forma
 git commit -m "feat: add parser" -m "AI-Assisted: yes"
 ```
 
+也可以标记使用的 AI 编码工具，报告会按工具汇总辅助代码新增行数：
+
+```bash
+git commit -m "feat: add parser" -m "AI-Assisted: yes" -m "AI-Tool: Codex"
+```
+
+工具名由提交者填写，例如 `Codex`、`Claude Code`、`Cursor` 或内部工具名。没有工具标签的 AI 辅助提交会归入“未注明”。工具名来自提交 trailer 或 `refs/notes/ai-tool`，程序不会自动推断。
+
+已有提交也可以用单独的 Git notes ref 标记工具：
+
+```bash
+git notes --ref=ai-tool add -m "AI-Tool: Codex" <commit>
+```
+
 也可给已有提交追加 Git note（默认读取 `refs/notes/ai-assisted`）：
 
 ```bash
