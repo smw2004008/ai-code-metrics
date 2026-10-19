@@ -14,6 +14,18 @@ from typing import Optional
 
 TRAILER = "ai-assisted"
 NOTES_REF = "refs/notes/ai-assisted"
+SOURCE_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs",
+    ".c", ".h", ".cpp", ".hpp", ".cs", ".php", ".rb", ".swift",
+    ".kt", ".kts", ".scala", ".sh", ".bash", ".sql",
+}
+
+
+@dataclass
+class FileStats:
+    path: str
+    additions: int
+    deletions: int
 
 
 @dataclass
@@ -23,6 +35,7 @@ class CommitStats:
     ai_assisted: bool
     additions: int
     deletions: int
+    files: list[FileStats]
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
@@ -54,18 +67,23 @@ def marked_by_note(repo: Path, commit: str) -> bool:
     return marked_by_trailer(note)
 
 
-def parse_numstat(raw: str) -> tuple[int, int]:
+def parse_numstat(raw: str) -> tuple[int, int, list[FileStats]]:
     additions = deletions = 0
+    files: list[FileStats] = []
     for line in raw.splitlines():
         fields = line.split("\t", 2)
         if len(fields) < 3:
             continue
+        filename = fields[2]
+        if Path(filename).suffix.lower() not in SOURCE_EXTENSIONS:
+            continue
         # Binary entries use '-' instead of a line count.
-        if fields[0].isdigit():
-            additions += int(fields[0])
-        if fields[1].isdigit():
-            deletions += int(fields[1])
-    return additions, deletions
+        file_additions = int(fields[0]) if fields[0].isdigit() else 0
+        file_deletions = int(fields[1]) if fields[1].isdigit() else 0
+        additions += file_additions
+        deletions += file_deletions
+        files.append(FileStats(filename, file_additions, file_deletions))
+    return additions, deletions, files
 
 
 def collect(repo: Path, since: Optional[str], until: Optional[str]) -> list[CommitStats]:
@@ -84,7 +102,7 @@ def collect(repo: Path, since: Optional[str], until: Optional[str]) -> list[Comm
         if len(parts) != 3:
             continue
         commit, subject, body = parts
-        additions, deletions = parse_numstat(
+        additions, deletions, files = parse_numstat(
             git(repo, "show", "--format=", "--numstat", "--no-renames", commit)
         )
         output.append(
@@ -94,6 +112,7 @@ def collect(repo: Path, since: Optional[str], until: Optional[str]) -> list[Comm
                 ai_assisted=marked_by_trailer(body) or marked_by_note(repo, commit),
                 additions=additions,
                 deletions=deletions,
+                files=files,
             )
         )
     return output
@@ -105,6 +124,12 @@ def summarize(repo: Path, commits: list[CommitStats], since: Optional[str], unti
     ai_commits = [item for item in commits if item.ai_assisted]
     ai_add = sum(item.additions for item in ai_commits)
     ai_del = sum(item.deletions for item in ai_commits)
+    files_by_path: dict[str, dict[str, int]] = {}
+    for commit in commits:
+        for file in commit.files:
+            totals = files_by_path.setdefault(file.path, {"additions": 0, "deletions": 0})
+            totals["additions"] += file.additions
+            totals["deletions"] += file.deletions
     return {
         "repository": str(repo.resolve()),
         "since": since,
@@ -116,6 +141,12 @@ def summarize(repo: Path, commits: list[CommitStats], since: Optional[str], unti
         "ai_assisted_additions": ai_add,
         "ai_assisted_deletions": ai_del,
         "ai_assisted_addition_ratio": round(ai_add / total_add, 4) if total_add else 0.0,
+        "files": [
+            {"path": path, **totals}
+            for path, totals in sorted(
+                files_by_path.items(), key=lambda item: item[1]["additions"], reverse=True
+            )
+        ],
         "methodology": (
             "AI-assisted commits are identified by the AI-Assisted: yes trailer or "
             "refs/notes/ai-assisted. All additions in a marked commit are counted; "
@@ -127,18 +158,25 @@ def summarize(repo: Path, commits: list[CommitStats], since: Optional[str], unti
 
 def render_text(report: dict) -> str:
     ratio = report["ai_assisted_addition_ratio"] * 100
-    return "\n".join(
-        [
-            f"仓库：{report['repository']}",
-            f"时间范围：{report['since'] or '全部'} 至 {report['until'] or '现在'}",
-            f"提交数：{report['commit_count']}",
-            f"总新增/删除行：{report['total_additions']} / {report['total_deletions']}",
-            f"AI 辅助提交数：{report['ai_assisted_commit_count']}",
-            f"AI 辅助新增/删除行：{report['ai_assisted_additions']} / {report['ai_assisted_deletions']}",
-            f"AI 辅助新增行占比：{ratio:.2f}%",
-            f"口径：{report['methodology']}",
-        ]
-    )
+    lines = [
+        f"仓库：{report['repository']}",
+        f"时间范围：{report['since'] or '全部'} 至 {report['until'] or '现在'}",
+        f"提交数：{report['commit_count']}",
+        f"代码新增/删除行：{report['total_additions']} / {report['total_deletions']}",
+        f"AI 辅助提交数：{report['ai_assisted_commit_count']}",
+        f"AI 辅助代码新增/删除行：{report['ai_assisted_additions']} / {report['ai_assisted_deletions']}",
+        f"AI 辅助代码新增行占比：{ratio:.2f}%",
+        "代码文件明细：",
+    ]
+    if report["files"]:
+        lines.extend(
+            f"  {item['path']}: +{item['additions']} / -{item['deletions']}"
+            for item in report["files"]
+        )
+    else:
+        lines.append("  （所选范围内没有符合扩展名的代码文件变更）")
+    lines.append(f"口径：{report['methodology']}")
+    return "\n".join(lines)
 
 
 def main() -> int:
