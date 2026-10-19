@@ -9,6 +9,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Optional
 
 
 TRAILER = "ai-assisted"
@@ -67,7 +68,7 @@ def parse_numstat(raw: str) -> tuple[int, int]:
     return additions, deletions
 
 
-def collect(repo: Path, since: str | None, until: str | None) -> list[CommitStats]:
+def collect(repo: Path, since: Optional[str], until: Optional[str]) -> list[CommitStats]:
     args = ["log", "--no-merges", "--format=%H%x1f%s%x1f%B%x1e"]
     if since:
         args.append(f"--since={since}")
@@ -98,7 +99,7 @@ def collect(repo: Path, since: str | None, until: str | None) -> list[CommitStat
     return output
 
 
-def summarize(repo: Path, commits: list[CommitStats], since: str | None, until: str | None) -> dict:
+def summarize(repo: Path, commits: list[CommitStats], since: Optional[str], until: Optional[str]) -> dict:
     total_add = sum(item.additions for item in commits)
     total_del = sum(item.deletions for item in commits)
     ai_commits = [item for item in commits if item.ai_assisted]

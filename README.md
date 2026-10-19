@@ -11,7 +11,7 @@
 
 ## 使用
 
-需要 Python 3.10+ 和 Git。无需安装第三方依赖。
+需要 Python 3.9+ 和 Git。无需安装第三方依赖。
 
 ```bash
 python ai_code_metrics.py --repo . --since "30 days ago" --format text
